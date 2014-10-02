@@ -1,0 +1,533 @@
+#! /bin/bash
+
+<<COMMENT
+Description: This script configures Fluid Mac workstations/laptops
+
+Changes:
+
+2012-6-16
+-Script created
+-Added hostname lookup from webpage using serial #
+-Added computer and local host name
+
+2012-6-26: 
+Added the following:
+-Logging
+-HD Rename
+-Disable IPv6
+-Advanced Ethenet options (DHCP ID, NETBIOS info)
+-Enabled Remote Management for administrator user (for ARD and screen sharing)
+-Enabled Remote Login for administrators group (for SSH access)
+-Energy saver options
+-Login window doesn't display user name
+
+2012-6-29
+Uploaded to GitHub
+
+2012-7-6
+-Folded user specific settings into user template modification placeholder
+-Add user creation placeholder
+-Added lock screen placeholder
+
+2012-7-11
+-Added VPN config section
+
+2012-7-13
+-Script will reassign the client identifier for Munki
+
+2012-7-17
+-Changed search terms for serial number, Mac Pros on Lion intorduced the processor tray serial number.
+
+2012-7-19
+-Updated logic for WiFi hardware ports on Mac Pros (they have two ethernet ports)
+
+2012-7-26
+-Separated script into "always run" and "run only when computer is defined in serials.txt"
+
+2012-8-9
+-Added the newbuild field
+-Changed the variables to convert to lowercase
+
+2012-8-14
+-Removing the check for group creation for SSH access. This will allow any local user on the machine ssh access if the admin policy doesn't take (users should all be admins anyways)
+
+2012-9-10
+-Read location from serials.txt and assign the correct munki server
+
+2012-9-11
+-Creates the new VPN connection
+
+2013-02-25
+-Fixed URLs to point to /repo instead of /munki_repo
+-Basic manifests are location specific. If manifest doesn't match base/cre/eng/xd then it will just assign as is.
+-Added SF wifi networks
+
+2014-04-29
+-Renamed & # "Create Old VPN" Removed
+-Renamed "Create Old VPN" to "Fluid VPN"
+-Added "Turn Off Thunderbolt" from IPv6 list 
+-Changed Battery times for display sleep to 10 minutes
+-Added Charging times for display sleep to 15 minutes
+
+COMMENT
+
+###################################################################################################
+#
+# General Stuff
+#
+###################################################################################################
+
+#################################################
+#  Variables
+#################################################
+
+logfiledir="/Library/Managed Installs/Logs/"
+now=$(date +"%b-%d-%y")
+serialconfig=http://munki.fluid.com/configs/serials.txt
+serial=`system_profiler SPHardwareDataType | grep "Serial Number (system)" | awk '{ print $4 }'`
+#pull the mac's name from a website
+macname=`curl -s $serialconfig | awk 'toupper($1)~/'"$serial"'/ {print$2}' | tr  '[:upper:]'  '[:lower:]'`
+macuser=`curl -s $serialconfig | awk 'toupper($1)~/'"$serial"'/ {print$3}' | tr  '[:upper:]'  '[:lower:]'`
+munkigroup=`curl -s $serialconfig | awk 'toupper($1)~/'"$serial"'/ {print$4}' | tr  '[:upper:]'  '[:lower:]'`
+location=`curl -s $serialconfig | awk 'toupper($1)~/'"$serial"'/ {print$5}' | tr  '[:upper:]'  '[:lower:]'` 
+newbuild=`curl -s $serialconfig | awk 'toupper($1)~/'"$serial"'/ {print$6}' | tr  '[:upper:]'  '[:lower:]'` 
+
+if [ "$macname" = "null" ]
+then
+	macname=`hostname`
+	echo macname not defined, using the system default hostname
+elif [ -z $macname ]
+then
+	macname=`hostname`
+	echo macname not defined, using the system default hostname
+fi
+
+log=$logfiledir$macname-$now.log
+
+
+#################################################
+#Redirect stdout and stderr to logfile
+#################################################
+
+
+exec 1>>"$log"
+exec 2>>"$log"
+
+#################################################
+# Put basic info into log
+#################################################
+
+echo "Date: $now
+Serial: $serial
+Macname: $macname
+Macuser: $macuser
+Munki Identifier: $munkigroup
+Location: $location
+New build?: $newbuild"
+
+
+
+###################################################################################################
+#
+# Configuration not specific to user/machine, runs on all machines
+#
+###################################################################################################
+
+
+#################################################
+# Update the conditional scripts for munki
+#################################################
+
+
+#################################################
+# Update the munkireport scripts
+#################################################
+
+
+#################################################
+# Update the munki server location
+#################################################
+
+echo "Assigning correct munki server based on location"
+defaults write /Library/Preferences/ManagedInstalls SoftwareRepoURL http://munki$location.fluid.com/repo
+defaults read /Library/Preferences/ManagedInstalls SoftwareRepoURL
+
+
+#################################################
+# Enable Remote Management for administrator user (screen sharing)
+#################################################
+
+# More info here: http://support.apple.com/kb/HT2370
+
+echo Enabling Remote Management for administrator
+sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users administrator -privs -all -restart -agent -menu
+
+
+#################################################
+# Enable Remote Login for admin group (ssh access)
+#################################################
+
+echo Enabling Remote Login for admin group...
+echo Creating com.apple.access_ssh ACL...
+dseditgroup -o create -q -v com.apple.access_ssh
+dseditgroup -o edit -a admin -t group com.apple.access_ssh
+
+#if [ -z `dseditgroup com.apple.access_ssh` ]
+#	then
+#	echo ERROR: com.apple.access_ssh group not created successfully. Will not turn on remote login.
+
+#	else
+#	echo ACL successfully created. Turning on Remote Login...
+	systemsetup -setremotelogin on
+	systemsetup -getremotelogin
+#fi
+
+
+#################################################
+# Set Energy Saver Options
+#################################################
+
+echo Changing Energy Saver Options...
+
+echo Changing computer sleep to Never for AC Power...
+pmset -c sleep 0
+
+echo Changing display sleep to 15 minutes for AC Power...
+pmset -c displaysleep 20
+
+echo Changing display sleep to 10 minutes for Battery...
+pmset -b displaysleep 10
+
+pmset -g custom
+
+
+#################################################
+# Display login window as Name and password
+#################################################
+
+echo Changing login window to not display usernames...
+defaults write /Library/Preferences/com.apple.loginwindow SHOWFULLNAME -bool YES
+
+if [ `defaults read /Library/Preferences/com.apple.loginwindow SHOWFULLNAME` -eq 1 ]
+	then
+	echo Success
+	
+	else
+	echo ERROR: loginwindow plist was not changed
+	
+fi
+
+
+
+
+###################################################################################################
+#
+# Configuration specific to user/machine, or run-once configurations 
+# Only runs if machine is listed in serials) 
+#
+###################################################################################################
+
+
+
+
+#################################################
+# Check to see if computer is a new build, if not then exit
+#################################################
+
+if [ $newbuild = "yes" ]
+then
+	echo newbuild field reads $newbuild, continuing...
+else 
+	echo newbuild field reads $newbuild, exiting
+	exit
+fi
+
+#################################################
+# Assign correct Munki group
+#################################################
+if [ $munkigroup = "cre" -o $munkigroup = "xd" -o $munkigroup = "eng" -o $munkigroup = "base" ] 
+then	
+	echo Assigning computer to $munkigroup-$location
+	defaults write /Library/Preferences/ManagedInstalls ClientIdentifier $munkigroup-$location
+	defaults read /Library/Preferences/ManagedInstalls ClientIdentifier
+
+else
+ 	echo Client Identifier $munkigroup does not match cre/xd/eng/base. 
+ 	defaults write /Library/Preferences/ManagedInstalls ClientIdentifier $munkigroup
+ 	defaults read /Library/Preferences/ManagedInstalls ClientIdentifier
+
+fi
+
+#################################################
+# Set ComputerName and LocalHostName
+#################################################
+
+echo Changing ComputerName...
+scutil --set ComputerName $macname
+echo Computer name is `scutil --get ComputerName`
+
+echo Changing LocalHostName...
+scutil --set LocalHostName $macname
+echo LocalHostName is `scutil --get LocalHostName`
+
+
+#################################################
+# Rename HD
+#################################################
+
+echo Changing HD name...
+diskutil rename "Macintosh HD" "$macname HD"
+diskutil list
+
+#################################################
+# Add and connect to preferred wireless networks
+#################################################
+echo Adding WiFi networks
+
+# Get the wifi port, usually en0 for MBP Retina, en1 for older MBP, en2 for mac pros
+wifiport=`networksetup -listallhardwareports | awk '/Wi-Fi/ { getline; print $2 }'`
+
+if [ $wifiport ]
+	then
+	networksetup -setairportpower $wifiport off
+	networksetup -removeallpreferredwirelessnetworks $wifiport
+	networksetup -setairportpower $wifiport on
+
+		if [ $location="ny" ] #NY Wifi connections
+		then
+			echo Adding NY Wifi Networks
+			# Add FluidCorp, first network defaults to preferred index of 0
+			networksetup -setairportnetwork $wifiport FluidCorp "I hate long passwords because I can never remember them"
+			# Add FluidGuest, using index of 1
+			networksetup -addpreferredwirelessnetworkatindex $wifiport FluidGuest 1 WPA2 Welcome2Fluid
+
+		elif [$location="sf"] #SF Wifi connections
+		then	
+			echo Adding SF Wifi Networks
+			networksetup -setairportnetwork $wifiport FluidGuest "Welcome2Fluid"
+
+		fi
+fi
+
+
+#################################################
+# Turn off IPv6
+#################################################
+
+echo Turning off IPv6...
+networksetup -setv6off "Ethernet"
+networksetup -setv6off "Wi-Fi"
+networksetup -setv6off "AirPort"
+networksetup -setv6off "USB Ethernet"
+networksetup -setv6off "Thunderbolt Ethernet"
+networksetup -setv6off "Ethernet 1"
+networksetup -setv6off "Ethernet 2"
+
+
+#################################################
+# Change advanced Ethernet options
+#################################################
+
+# DHCP Id
+echo Changing DHCP ID...
+networksetup -setdhcp "Ethernet" $macname
+
+# NetBIOS - NetBIOS to uppercase $macname and Workgroup to FLUIDSF
+nbname=`echo $macname | tr "[a-z]" "[A-Z]"`
+
+echo Changing NetBIOS Name...
+defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server NetBIOSName $nbname
+echo NetBIOS Name: `defaults read /Library/Preferences/SystemConfiguration/com.apple.smb.server NetBIOSName`
+
+echo Changing NetBIOS Workgroup...
+defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server Workgroup FLUIDSF
+echo Workgroup: `defaults read /Library/Preferences/SystemConfiguration/com.apple.smb.server Workgroup`
+
+
+#################################################
+# Modify user template settings (Lion only?)
+#################################################
+
+#Require password for sleep and screen saver
+#com.apple.screensaver.plist, should be able to copy in
+#Change permissions
+#Works across computers
+
+#Change screensaver
+#Filename generated dynamically based on computer/mac address... minor need, will look at later
+
+#Change background
+
+
+#Customize Dock
+#com.apple.dock.plst
+#Host specific file for dock database also exists, can we copy across hosts?
+#Works across computers but not everything is retained
+
+#Add Bison
+#com.apple.sidebarlists.plist
+#Doesn't exist unless Finder is opened by user
+#If we copy in from another computer (with different HD name and such) would it still work/rebuild itself?
+#Doesn't seem to work across computers... would require a manual add when the user isn't logged in.
+
+
+
+
+
+
+#################################################
+# Create User
+#################################################
+
+
+
+
+
+
+##########################################
+#  (RETIRED)  Create Old VPN Connection #
+#########################################
+
+# Source: http://pastie.org/1984487
+# Writes PLISTs and creates Keychain entry necessary for Cisco IPSec VPN	on Mac OS X client Snow Leopard.
+
+##vpnUuid=`uuidgen` 
+# The random UUID for this config
+
+##serverName="vpnc.fluid.com" 
+# Address of VPN server
+
+##groupName="Fluid" 
+# The group of usernames that is allowed in
+
+##labelName="Fluid Old VPN (Cisco IPSec)"
+# The name of connection type displayed in GUI
+
+##sharedSecret="Fluid1"  
+# The Shared Secret - no this isn't ours :-)
+
+# Setup Keychain shared secret granting appropriate access for the OS apps
+
+##/usr/bin/security add-generic-password -a "$groupName" -l "$labelName" -D "IPSec Shared Secret" -w "$sharedSecret" -s "$vpnUuid".SS -T /System/Library/Frameworks/SystemConfiguration.framework/Resources/SCHelper -T /Applications/System\ Preferences.app -T /System/Library/CoreServices/SystemUIServer.app -T /usr/sbin/pppd -T /usr/sbin/racoon /Library/Keychains/System.keychain
+
+
+# Quickly mess with the plist before configd notices how ugly this all is
+##/usr/bin/killall configd
+
+# Write a Network Config containing this keychain item directly to System Config
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:DNS dict" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPv4 dict" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPv4:ConfigMethod string Automatic" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPv6 dict" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Proxies dict" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Proxies:ExceptionList array" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Proxies:ExceptionList:0 string \*\.local" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Proxies:ExceptionList:1 string 169\.254\/16" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Proxies:FTPPassive integer 1" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:SMB dict" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:UserDefinedName string $labelName" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Interface dict" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Interface:Type string IPSec" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec dict" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:AuthenticationMethod string SharedSecret" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:LocalIdentifier string $groupName" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:LocalIdentifierType string KeyID" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:RemoteAddress string $serverName" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:SharedSecret string $vpnUuid\.SS" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:SharedSecretEncryption string Keychain" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:XAuthName string $macuser" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:XAuthPasswordEncryption string Prompt" /Library/Preferences/SystemConfiguration/preferences.plist
+
+
+# At this point, we should have only one Network Set (Automatic) so we find out its UUID --- errr, messy
+##autoUuid=`/usr/libexec/Plistbuddy -c "Print :Sets" /Library/Preferences/SystemConfiguration/preferences.plist | grep -B1 -m1 Automatic | grep Dict | awk '{ print $1 }'`
+
+# and we add our newly created config to the default set
+##/usr/libexec/PlistBuddy -c "Add :Sets:$autoUuid:Network:Service:$vpnUuid dict" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :Sets:$autoUuid:Network:Service:$vpnUuid:__LINK__ string \/NetworkServices\/$vpnUuid" /Library/Preferences/SystemConfiguration/preferences.plist
+##/usr/libexec/PlistBuddy -c "Add :Sets:$autoUuid:Network:Global:IPv4:ServiceOrder: string $vpnUuid" /Library/Preferences/SystemConfiguration/preferences.plist
+
+
+#########################
+# Create VPN Connection #
+#########################
+
+# Source: http://pastie.org/1984487
+# Writes PLISTs and creates Keychain entry necessary for Cisco IPSec VPN	on Mac OS X client Snow Leopard.
+
+vpnUuid=`uuidgen` 
+# The random UUID for this config
+
+serverName="asavpn.fluid.com" 
+# Address of VPN server
+
+groupName="FluidRAPolicy" 
+# The group of usernames that is allowed in
+
+labelName="Fluid VPN"
+# The name of connection type displayed in GUI
+
+sharedSecret="Fluid1"  
+# The Shared Secret - no this isn't ours :-)
+
+# Setup Keychain shared secret granting appropriate access for the OS apps
+
+/usr/bin/security add-generic-password -a "$groupName" -l "$labelName" -D "IPSec Shared Secret" -w "$sharedSecret" -s "$vpnUuid".SS -T /System/Library/Frameworks/SystemConfiguration.framework/Resources/SCHelper -T /Applications/System\ Preferences.app -T /System/Library/CoreServices/SystemUIServer.app -T /usr/sbin/pppd -T /usr/sbin/racoon /Library/Keychains/System.keychain
+
+
+# Quickly mess with the plist before configd notices how ugly this all is
+/usr/bin/killall configd
+
+# Write a Network Config containing this keychain item directly to System Config
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:DNS dict" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPv4 dict" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPv4:ConfigMethod string Automatic" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPv6 dict" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Proxies dict" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Proxies:ExceptionList array" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Proxies:ExceptionList:0 string \*\.local" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Proxies:ExceptionList:1 string 169\.254\/16" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Proxies:FTPPassive integer 1" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:SMB dict" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:UserDefinedName string $labelName" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Interface dict" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:Interface:Type string IPSec" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec dict" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:AuthenticationMethod string SharedSecret" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:LocalIdentifier string $groupName" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:LocalIdentifierType string KeyID" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:RemoteAddress string $serverName" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:SharedSecret string $vpnUuid\.SS" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:SharedSecretEncryption string Keychain" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:XAuthName string $macuser" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :NetworkServices:$vpnUuid:IPSec:XAuthPasswordEncryption string Prompt" /Library/Preferences/SystemConfiguration/preferences.plist
+
+
+# At this point, we should have only one Network Set (Automatic) so we find out its UUID --- errr, messy
+autoUuid=`/usr/libexec/Plistbuddy -c "Print :Sets" /Library/Preferences/SystemConfiguration/preferences.plist | grep -B1 -m1 Automatic | grep Dict | awk '{ print $1 }'`
+
+# and we add our newly created config to the default set
+/usr/libexec/PlistBuddy -c "Add :Sets:$autoUuid:Network:Service:$vpnUuid dict" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :Sets:$autoUuid:Network:Service:$vpnUuid:__LINK__ string \/NetworkServices\/$vpnUuid" /Library/Preferences/SystemConfiguration/preferences.plist
+/usr/libexec/PlistBuddy -c "Add :Sets:$autoUuid:Network:Global:IPv4:ServiceOrder: string $vpnUuid" /Library/Preferences/SystemConfiguration/preferences.plist
+
+#######################
+
+
+
+# Show VPN status in menubar is a user specific setting (~/Library/Preferences/com.apple.systemuiserver), I will worry about this later
+# Possible to set on a machine level? https://github.com/ptb/Mac-OS-X-Lion-Setup/blob/master/setup.sh (uses defaults write -currentHost)
+
+
+# the man page says configd was designed to run without any intervention - 
+# - we're about to reboot, so it should pick up the change
+
+
+#/sbin/shutdown -r now
+# Commenting out shutdown, instead will set package to require restart
+
+
+echo Exiting...
+		
+
+exit 0

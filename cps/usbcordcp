@@ -1,0 +1,12 @@
+#!/bin/bash
+
+cp -aR /Volumes/NO\ NAME/cord/CoRD.app /Applications/
+
+mkdir ~/Library/Application\ Support/CoRD
+mkdir ~/Library/Application\ Support/CoRD/Servers
+
+cp /Volumes/NO\ NAME/cord/PSA-Approval.rdp ~/Library/Application\ Support/CoRD/Servers/
+
+open /Applications/CoRD.app
+
+exit

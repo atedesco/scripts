@@ -1,0 +1,6 @@
+#!/bin/bash/
+
+cd ~/.Trash/
+srm -rf *
+exit
+

@@ -1,6 +1,0 @@
-#!/bin/bash
-
-cp -r /Volumes/NO\ NAME/CoRD.app /Applications/
-cp /Volumes/NO\ NAME/PSA-Approval.rdp ~/Library/Application\ Support/CoRD/Servers/
-pause
-
