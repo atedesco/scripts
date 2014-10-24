@@ -1,0 +1,6 @@
+#!/bin/bash
+
+cd /Library/Application\ Support/Kaspersky\ Lab/KAV/Binaries
+kav update
+
+exit 
