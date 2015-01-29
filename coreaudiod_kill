@@ -1,0 +1,10 @@
+#!/bin/bash
+
+on run {input, parameters}
+    set myPassword to "My Password"
+
+    ignoring application responses
+        do shell script "sudo killall coreaudiod &>/dev/null &" password myPassword with administrator privileges
+    end ignoring
+end run
+
